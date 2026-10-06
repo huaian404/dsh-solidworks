@@ -1,0 +1,31 @@
+{
+  "name": "dsh-solidworks",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Drive SolidWorks from DeepSeek Harness: run VBScript over COM, verify what was built by reading back the feature tree and rendering it, and probe which API routes work on this machine.",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "assets",
+    "cordis.patch.yml",
+    "README.md"
+  ],
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "solidworks",
+    "cad"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "license": "MIT"
+}

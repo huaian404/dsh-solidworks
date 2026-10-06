@@ -1,0 +1,30 @@
+# ============================================================================
+# dsh-solidworks — bundle patch
+#
+# Declares this plugin's single loader row. DSH composes a profile tree as
+# patches: every bundle listed in the profile package.json's dsh.profile.bundles,
+# then the profile's own cordis.patch.yml.
+#
+# Install (local development):
+#   1. add "dsh-solidworks": "file:<path to this plugin>" to the profile's
+#      package.json dependencies and "dsh-solidworks" to dsh.profile.bundles
+#   2. make the package resolvable from the profile (pnpm install, or a
+#      directory junction at <profile>/node_modules/dsh-solidworks)
+#   3. reload the app
+# ============================================================================
+
+- insert:
+    - id: dsh-solidworks
+      name: dsh-solidworks
+      config:
+        # Leave partTemplate empty to auto-detect the newest ASCII .prtdot under
+        # C:\ProgramData\SOLIDWORKS\<year>\templates (non-ASCII paths cannot
+        # cross the COM boundary).
+        partTemplate: ""
+        # ASCII scratch dir for staged scripts, renders and reports.
+        scratchDir: ""
+        # Where user recipes (JSON) are stored. Leave empty to keep them beside
+        # the scratch dir; point it at a stable ASCII path to survive restarts.
+        recipeDir: ""
+        # Hard cap for one solidworks_run call.
+        defaultTimeoutMs: 900000

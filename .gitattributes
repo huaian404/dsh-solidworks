@@ -1,0 +1,20 @@
+# Normalize line endings in the repository, and keep the VBS assets byte-exact.
+#
+# Why this matters here: the VBScript assets are staged to disk by the plugin
+# with FORCED CRLF because WSH reads .vbs as ANSI and mis-parses bare LF
+# sources. The staging step is therefore independent of how the file sits in
+# the repository, and tying the assets to LF in the index (not CRLF that a
+# Windows checkout would materialize) keeps every clone identical.
+#
+# `-text` on the .vbs files means "never convert these": whatever bytes are
+# committed are the bytes checked out, on any platform.
+
+* text=auto eol=lf
+
+*.vbs -text
+
+# Binary artifacts, if one is ever added by accident.
+*.bmp -text
+*.SLDPRT -text
+*.SLDASM -text
+*.SLDDRW -text

@@ -1,0 +1,31 @@
+# Dependencies (present only if someone installs this package into a profile
+# the ordinary way instead of by absolute path; the plugin itself has none).
+node_modules/
+pnpm-lock.yaml
+npm-debug.log*
+pnpm-debug.log*
+yarn-error.log*
+
+# Test scratch: staged VBScripts, .SLDPRT parts, .bmp renders and JSON reports.
+# Both test/.scratch/** and %TEMP%\dsh-solidworks\* are machine-local artifacts
+# and are rebuilt by running the test; never commit them.
+test/.scratch/
+*.SLDPRT
+*.SLDASM
+*.SLDDRW
+*.prtdot
+*.bmp
+
+# DSH runtime state / caches
+.dsh/
+*.log
+
+# OS clutter
+Thumbs.db
+desktop.ini
+.DS_Store
+
+# Editors / IDEs
+.vscode/
+.idea/
+*.swp
