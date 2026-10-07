@@ -9,7 +9,7 @@ open** and the **verified part stays verified**.
 | | Requirement | Why |
 |---|---|---|
 | OS | **Windows only** | The plugin reaches SolidWorks through COM (`cscript` / `WScript` late binding), which exists on no other platform. |
-| CAD | A **locally installed SolidWorks** (developed against 2026 SP2.1) | Every tool drives the running desktop application; there is no headless or file-format fallback. |
+| CAD | A **locally installed SolidWorks** (developed against 2026 SP2.1) | Every tool drives the running desktop application; there is no headless or file-format fallback. Another release is not a barrier: the API is reached by late binding, and the capability probe measures the install that is actually there. |
 | Runtime | `cscript.exe` (ships with Windows) and the SolidWorks COM registration for the current user | A SolidWorks install performed for another user, or a portable/registry-free install, is not reachable. |
 | Node | Node 18+ to run the plugin and the tests | ESM, `import.meta.dirname`, top-level `await`. |
 | Locale/paths | An **ASCII** scratch directory and part template | COM mangles non-ASCII paths, so the plugin refuses them up front. `%TEMP%\dsh-solidworks` is the default and is normally ASCII. |
@@ -19,6 +19,32 @@ because `GetMassProperties`, `GetBodyBox` and `GetCurves` return `Empty`
 through late binding on this host, so a green run requires a real SolidWorks
 session with a GUI. Every tool call fails on a machine without SolidWorks, by
 design rather than by accident.
+
+### Working across SolidWorks releases
+
+A capability report describes the API surface of **one installed release**, so
+the cache is scoped to the install that produced it — `capabilities-2025.json`,
+`capabilities-2026.json` — and an upgrade therefore re-probes by itself instead
+of serving the new install a report measured on the old one. Which install a
+report belongs to is always disclosed (`cache scope:` in the rendered result,
+`swVersionScope` in the returned value), on failure as well as success.
+
+The scope keys on the **year**, which is what the install path carries: a
+Service Pack within the same year does not invalidate the cache. Run
+`solidworks_capabilities { force: true }` after installing one, and again
+whenever a recipe that used to verify starts failing for no obvious reason.
+Version-specific behaviour that the plugin cannot paper over:
+
+- **Part file format is one-way.** A `.SLDPRT` saved by a newer release cannot
+  be opened by an older one. The shipped recipes each build a new document, so
+  they are unaffected; hand-written scripts that open an existing part are not.
+- **`FeatureManager` method signatures do change between releases** — the
+  `InsertProtrusionSwept4` / `InsertCutSwept*` family in particular. That is the
+  reason `sweptCut` is measured rather than assumed, and why a recipe that
+  depends on such a route must be re-verified on a new install.
+- **A recipe that fails on a different release is a data edit, not a code
+  change**: re-derive the feature with `solidworks_run`, verify it, and
+  `solidworks_recipes save` the replacement.
 
 | Tool | Role |
 |---|---|
@@ -133,6 +159,11 @@ Measured on SolidWorks 2026 SP2.1, zh-CN Windows, late binding through
   invalid parameter count and the `CreateDefinition(18)` pipeline fails inside
   `AccessSelections`. Threads are therefore built as a **core body at the minor
   diameter plus a merged swept boss** — how a lathe cuts a thread.
+- **The API surface is per-install, not per-plugin.** Every one of the facts
+  above was measured on one release, so the probe result is cached under the
+  install that produced it (`capabilities-<year>.json`) rather than under a
+  fixed file name. A different install cannot be served another's report, and a
+  Service Pack within the same year is covered only by the 6-hour TTL.
 
 ## Install
 
@@ -198,6 +229,7 @@ Set fTh = fm.InsertProtrusionSwept4(True, False, 0, False, False, 0, 0, False, _
 
 ```
 node test/schema-guard.mjs           # schemas inside the Harness's enforced subset
+node test/capability-cache.mjs       # the probe cache is scoped per install (no CAD needed)
 node test/drive-tools.mjs            # run + verify + probe against live SolidWorks
 node test/promote-thread-recipe.mjs  # the recipe gate
 node test/recipes.mjs                # the recipe data layer (save / run / isolation)

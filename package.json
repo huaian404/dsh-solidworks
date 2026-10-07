@@ -1,6 +1,6 @@
 {
   "name": "dsh-solidworks",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "description": "Drive SolidWorks from DeepSeek Harness: run VBScript over COM, verify what was built by reading back the feature tree and rendering it, and probe which API routes work on this machine.",
   "type": "module",
