@@ -67,7 +67,7 @@ const registered = ({ template, versionDir }) => {
     },
     { scratchDir: join(base, 'scratch') },
   )
-  return tools.get('solidworks_capabilities')
+  return tools
 }
 
 /**
@@ -76,7 +76,7 @@ const registered = ({ template, versionDir }) => {
  * both outcomes, which is what keeps this test runnable off a CAD machine.
  */
 const call = async (options) => {
-  const tool = registered(options)
+  const tool = registered(options).get('solidworks_capabilities')
   const value = await tool.execute({ force: options.force === true }, {})
   const rendered = tool.output.render({}, value).map((c) => c.text).join('\n')
   delete process.env.SW_TEST_TEMPLATE
@@ -120,7 +120,23 @@ if (existsSync('C:\\ProgramData\\SOLIDWORKS')) {
 // 6. the cache file name actually carries the scope
 check('cache file name is scoped, not a bare capabilities.json', /capabilities-2026\.json$/.test(String(a.value.path)), String(a.value.path))
 
-// 7. a real probe (when this host has SolidWorks) writes the scoped file
+// 7. the cache lives at INSTANCE level while the scratch workspace is per
+//    INVOCATION. Both halves matter: a fresh directory per call would mean the
+//    6-hour TTL is never reached, and a shared directory per instance would put
+//    two invocations' inspect.json in one place.
+const scoped = registered({ template: t2026 })
+const runA = scoped.get('solidworks_run')
+const runB = scoped.get('solidworks_run')
+const caps = scoped.get('solidworks_capabilities')
+const w1 = (await runA.execute({ script: 'WScript.Echo "a"', timeoutMs: 15000 }, { callId: 'w-one' })).dir
+const w2 = (await runB.execute({ script: 'WScript.Echo "b"', timeoutMs: 15000 }, { callId: 'w-two' })).dir
+const c1 = await caps.execute({}, { callId: 'c-one' })
+const c2 = await caps.execute({}, { callId: 'c-two' })
+check('two invocations get two different workspaces', w1 !== w2, `${w1} vs ${w2}`)
+check('the cache path is stable across those same invocations', c1.path === c2.path, `${c1.path} vs ${c1.path === c2.path ? '' : c2.path}`)
+check('the cache is not inside an invocation workspace', !String(c1.path).includes('w-one') && /capabilities-2026\.json$/.test(String(c1.path)), String(c1.path))
+
+// 8. a real probe (when this host has SolidWorks) writes the scoped file
 const f = await call({ template: t2026, force: true })
 if (f.value.error) {
   console.log(`SKIP  the probe itself did not run here (${f.value.error}) — the scope logic is asserted above`)

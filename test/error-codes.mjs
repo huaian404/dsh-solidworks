@@ -129,6 +129,37 @@ check(
   failures.map((r) => r.value.code).filter(Boolean).join(','),
 )
 
+// 8. Scratch isolation: two invocations must not share a workspace, because
+//    SolidWorks has one active document and a fixed `inspect.json` in a shared
+//    directory lets one verification read another invocation's report.
+const first = await call('solidworks_run', { script: 'WScript.Echo "a"', timeoutMs: 15000 })
+const second = await call('solidworks_run', { script: 'WScript.Echo "b"', timeoutMs: 15000 })
+check('two invocations get different scratch directories', first.value.dir !== second.value.dir, `${first.value.dir} vs ${second.value.dir}`)
+check(
+  'the scratch directory is per call, not a fixed "session"',
+  typeof first.value.dir === 'string' && !/[\\/]session$/.test(first.value.dir),
+  String(first.value.dir),
+)
+
+// 9. A tool that drives SolidWorks must NOT declare isConcurrencySafe: the host
+//    schedules undeclared tools as `exclusive` and serializes them for us. A
+//    read-only tool may declare it, and then must actually return true.
+const safety = {
+  solidworks_run: tools.get('solidworks_run').isConcurrencySafe,
+  solidworks_recipe: tools.get('solidworks_recipe').isConcurrencySafe,
+  solidworks_verify: tools.get('solidworks_verify').isConcurrencySafe,
+}
+check(
+  'the UI-driving tools stay exclusive (undeclared) so the host serializes them',
+  safety.solidworks_run === undefined && safety.solidworks_recipe === undefined,
+  `run=${typeof safety.solidworks_run} recipe=${typeof safety.solidworks_recipe}`,
+)
+check(
+  'the read-only tools declare concurrency safety and honour it',
+  typeof safety.solidworks_verify === 'function' && safety.solidworks_verify({}) === true,
+  `verify=${typeof safety.solidworks_verify}`,
+)
+
 const failed = results.filter((r) => !r.ok)
 console.log(`\n${failed.length === 0 ? 'ALL PASS' : `${failed.length} FAILED`} (${results.length} checks)`)
 process.exit(failed.length === 0 ? 0 : 1)

@@ -89,8 +89,31 @@ reworded, the codes may not. `test/error-codes.mjs` pins them.
 | `invalid-input` | The tool call itself was malformed | Fix the arguments |
 | `unknown` | Classified as a failure but not attributable | Report it; the classifier needs another signal |
 
-## Architecture: open composition, closed primitives
+### Isolation and concurrency
 
+SolidWorks has **one active document**, shared by every caller on the machine.
+That single fact drives the model here:
+
+- **Scratch is per invocation.** Each tool call works in its own directory, keyed
+  by the host's `callId`. A fixed `inspect.json` in a shared directory would let
+  one verification read another invocation's report — and reading someone
+  else's model as your own is a wrong answer, not a slow one.
+- **Caches and recipes are per plugin instance.** `capabilities-<year>.json` and
+  the user recipe store sit beside the scratch directories rather than inside
+  one, so the 6-hour probe TTL is actually reachable and a `save` is visible from
+  the next turn. Instances prune the scratch base to the newest 40 invocation
+  directories; `recipes/` and the cache files are never touched.
+- **The UI-driving tools are exclusive.** `solidworks_run` and
+  `solidworks_recipe` deliberately do **not** declare `isConcurrencySafe`, so the
+  host schedules them as `exclusive` and serializes them without the plugin
+  keeping a lock of its own. `solidworks_verify` and `solidworks_capabilities`
+  only read the active document, so they declare it and may run in parallel.
+- **A recipe's build and verification share one directory** — both happen inside
+  the `solidworks_recipe` invocation, which is what makes "verify what you just
+  built" meaningful. A standalone `solidworks_verify` call gets its own
+  directory, so it inspects the active document rather than any stored report.
+
+## Architecture: open composition, closed primitives
 ```
         open composition                     closed primitives
    ┌──────────────────────────┐        ┌──────────────────────────────┐
