@@ -1,8 +1,20 @@
 # dsh-solidworks
 
+[![ci](https://github.com/huaian404/dsh-solidworks/actions/workflows/ci.yml/badge.svg)](https://github.com/huaian404/dsh-solidworks/actions/workflows/ci.yml)
+
 Drive SolidWorks from DeepSeek Harness. Five model-facing tools over the
 SolidWorks COM API, designed so that **the open part of the problem stays
 open** and the **verified part stays verified**.
+
+> **Trust model.** `solidworks_run` executes arbitrary VBScript with the
+> privileges of the account running the Harness — it can read and write any file
+> that account can reach, start other processes, and change machine state. That
+> is the deliberate price of the escape hatch: no declarative emitter set can
+> cover every SolidWorks feature, so the plugin never narrows what can be
+> modelled. Treat a call to it as equivalent to running a script yourself, and
+> gate it accordingly with the host's approval policy. `solidworks_verify` runs
+> a bundled read-only inspector and renders the active document to images;
+> it never saves the model.
 
 ## Requirements
 
@@ -11,7 +23,7 @@ open** and the **verified part stays verified**.
 | OS | **Windows only** | The plugin reaches SolidWorks through COM (`cscript` / `WScript` late binding), which exists on no other platform. |
 | CAD | A **locally installed SolidWorks** (developed against 2026 SP2.1) | Every tool drives the running desktop application; there is no headless or file-format fallback. Another release is not a barrier: the API is reached by late binding, and the capability probe measures the install that is actually there. |
 | Runtime | `cscript.exe` (ships with Windows) and the SolidWorks COM registration for the current user | A SolidWorks install performed for another user, or a portable/registry-free install, is not reachable. |
-| Node | Node 18+ to run the plugin and the tests | ESM, `import.meta.dirname`, top-level `await`. |
+| Node | Node **20.11+** to run the plugin and the tests | ESM and `import.meta.dirname` (added in 20.11); the tests use top-level `await`. |
 | Locale/paths | An **ASCII** scratch directory and part template | COM mangles non-ASCII paths, so the plugin refuses them up front. `%TEMP%\dsh-solidworks` is the default and is normally ASCII. |
 
 There is **no Linux/macOS path and no CI path**: verification is render-based
@@ -53,6 +65,29 @@ Version-specific behaviour that the plugin cannot paper over:
 | `solidworks_capabilities` | Capability probe. Reports which API routes work on *this* machine, cached 6 h, so a strategy can be routed around a broken call instead of discovering it by failing. |
 | `solidworks_recipe` | Runs a stored recipe by name, with parameter overrides, and verifies the result against the recipe's own recorded expectation. |
 | `solidworks_recipes` | The data surface: list / save / remove recipes. Promotion happens here, as a data write — never a source edit. |
+
+### Error codes
+
+Every failure carries a stable machine-readable `code` beside its human-readable
+`error`, in the returned value and in the rendered text (`solidworks_run failed:
+[cscript-missing] …`). Branch on the code, not on the prose — the prose may be
+reworded, the codes may not. `test/error-codes.mjs` pins them.
+
+| Code | Meaning | What it usually calls for |
+|---|---|---|
+| `no-solidworks` | COM could not start `SldWorks.Application` | Install/launch SolidWorks; check the COM registration for this user |
+| `no-template` | No usable `.prtdot` part template | Set `partTemplate` in `cordis.patch.yml` |
+| `cscript-missing` | `cscript.exe` could not be launched (not on `PATH`, or blocked by policy) | Fix `PATH`, or the sandbox/AV policy that blocks it |
+| `non-ascii-script` | The script contains non-ASCII text | WSH parses `.vbs` as ANSI; keep script text and comments ASCII |
+| `timeout` | The script outlived its `timeoutMs` | SolidWorks may be showing a modal dialog — dismiss it, then retry |
+| `script-error` | The script reached the interpreter and failed | Read the log: this one is the script's fault |
+| `probe-failed` | The capability probe produced no readable report | Retry with `force: true`; check the log |
+| `inspect-failed` | The verification inspector produced no readable report | Check the active document, then retry |
+| `verification-failed` | A recipe built a model that does not match its recorded expectation | The build or the recipe's expectation changed — investigate both |
+| `recipe-unknown` | No recipe by that name | `solidworks_recipes { action: "list" }` |
+| `recipe-invalid` | Recipe or parameter failed validation | The message names the offending field |
+| `invalid-input` | The tool call itself was malformed | Fix the arguments |
+| `unknown` | Classified as a failure but not attributable | Report it; the classifier needs another signal |
 
 ## Architecture: open composition, closed primitives
 
@@ -227,12 +262,33 @@ Set fTh = fm.InsertProtrusionSwept4(True, False, 0, False, False, 0, 0, False, _
 
 ## Tests
 
+Two classes, and the split is deliberate: the offline class runs anywhere and is
+what CI gates on, the CAD class needs a live SolidWorks session and stays manual.
+
+**Offline** — no SolidWorks, no `cscript`, no network. These are what
+`.github/workflows/ci.yml` runs on a clean `windows-latest` runner for Node 20
+and 22:
+
 ```
+node test/load-compat.mjs            # every module imports; all five tools register
 node test/schema-guard.mjs           # schemas inside the Harness's enforced subset
-node test/capability-cache.mjs       # the probe cache is scoped per install (no CAD needed)
+node test/routing-advice.mjs         # capability report -> routing guidance
+node test/capability-cache.mjs       # the probe cache is scoped per install
+node test/error-codes.mjs            # every failure carries a stable code
+```
+
+**Needs a live SolidWorks session** — these drive COM and are run by hand on a
+CAD machine:
+
+```
 node test/drive-tools.mjs            # run + verify + probe against live SolidWorks
+node test/output-contract.mjs        # result fields survive the host's JSON contract
+node test/verify-active.mjs <build.vbs> <bodyCount> [kinds]
+node test/rebuild-via-plugin.mjs     # rebuild a known shape through the plugin
 node test/promote-thread-recipe.mjs  # the recipe gate
+node test/recipe-candidates.mjs      # candidate scripts against the live API
 node test/recipes.mjs                # the recipe data layer (save / run / isolation)
+node test/recipe-output-contract.mjs # recipe result shape
 ```
 
 `schema-guard.mjs` exists because a schema violation does not fail one tool — it
@@ -249,7 +305,14 @@ aborts the **whole plugin entry** at composition time with
   keywords such as `description` belong on the annotated node, never inside
   `items`.
 
-Drives the three registered tools against the live SolidWorks session without
+`error-codes.mjs` synthesises its environment faults rather than mocking them:
+pointing `PATH` at an empty directory is what makes `cscript-missing` testable
+without uninstalling anything, and `SW_VERSION_DIR` pins the install root that
+`capability-cache.mjs` derives its scope from. Cases that genuinely need a live
+SolidWorks session (a real timeout, a successful run) report `SKIP` with the
+observed outcome instead of asserting a fiction.
+
+`drive-tools.mjs` drives the registered tools against the live session without
 the host: capability probe, a disc build through `solidworks_run`, a passing
 verify, a deliberately failing verify (to prove mismatches surface), and a
 non-ASCII script (to prove the encoding guard fires).
