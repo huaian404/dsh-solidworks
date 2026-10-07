@@ -21,6 +21,10 @@
         # C:\ProgramData\SOLIDWORKS\<year>\templates (non-ASCII paths cannot
         # cross the COM boundary).
         partTemplate: ""
+        # The .asmdot used by assembly builds, exported to scripts as
+        # %SWASMTPL%. Leave empty to auto-detect the newest ASCII .asmdot the
+        # same way; a part template cannot create an assembly document.
+        assemblyTemplate: ""
         # ASCII scratch dir for staged scripts, renders and reports.
         scratchDir: ""
         # Where user recipes (JSON) are stored. Leave empty to keep them beside

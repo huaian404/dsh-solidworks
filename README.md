@@ -4,7 +4,10 @@
 
 Drive SolidWorks from DeepSeek Harness. Five model-facing tools over the
 SolidWorks COM API, designed so that **the open part of the problem stays
-open** and the **verified part stays verified**.
+open** and the **verified part stays verified**. Parts and assemblies both
+build; the one thing this binding route cannot do is create a mate, so an
+assembly made here is positioned rather than constrained — see
+[Assemblies](#assemblies).
 
 > **Trust model.** `solidworks_run` executes arbitrary VBScript with the
 > privileges of the account running the Harness — it can read and write any file
@@ -60,8 +63,8 @@ Version-specific behaviour that the plugin cannot paper over:
 
 | Tool | Role |
 |---|---|
-| `solidworks_run` | Escape hatch. Runs any VBScript against SolidWorks; handles the ANSI/CRLF encoding trap, the ASCII template, the ASCII scratch dir and a hard timeout. This is why the plugin never narrows what can be modelled. |
-| `solidworks_verify` | Validation harness. Reads back what a script actually built (semantic feature kinds, body count, renders) and compares it with an expected shape. **A recipe is only trustworthy once this reports `ok:true`.** |
+| `solidworks_run` | Escape hatch. Runs any VBScript against SolidWorks; handles the ANSI/CRLF encoding trap, the ASCII templates (`%SWPARTTPL%`, `%SWASMTPL%`), the ASCII scratch dir and a hard timeout. This is why the plugin never narrows what can be modelled — assemblies included. |
+| `solidworks_verify` | Validation harness. Reads back what a script actually built (semantic feature kinds, body count for a part, component/mate counts for an assembly, renders) and compares it with an expected shape. **A recipe is only trustworthy once this reports `ok:true`.** |
 | `solidworks_capabilities` | Capability probe. Reports which API routes work on *this* machine, cached 6 h, so a strategy can be routed around a broken call instead of discovering it by failing. |
 | `solidworks_recipe` | Runs a stored recipe by name, with parameter overrides, and verifies the result against the recipe's own recorded expectation. |
 | `solidworks_recipes` | The data surface: list / save / remove recipes. Promotion happens here, as a data write — never a source edit. |
@@ -75,7 +78,7 @@ reworded, the codes may not. `test/error-codes.mjs` pins them.
 
 | Code | Meaning | What it usually calls for |
 |---|---|---|
-| `no-solidworks` | COM could not start `SldWorks.Application` | Install/launch SolidWorks; check the COM registration for this user |
+| `no-solidworks` | COM could not start `SldWorks.Application` | Install/launch SolidWorks; check the COM registration for this user. A `429` inside the script's own log means no free automation connection — see the note under Tests |
 | `no-template` | No usable `.prtdot` part template | Set `partTemplate` in `cordis.patch.yml` |
 | `cscript-missing` | `cscript.exe` could not be launched (not on `PATH`, or blocked by policy) | Fix `PATH`, or the sandbox/AV policy that blocks it |
 | `non-ascii-script` | The script contains non-ASCII text | WSH parses `.vbs` as ANSI; keep script text and comments ASCII |
@@ -173,8 +176,14 @@ take the plugin down:
 Substitution is validated before anything runs: the script must be ASCII, every
 `{{NAME}}` must have a declared finite-number parameter, and every declared
 parameter must actually appear. `%NAME%` is reserved for the Windows environment
-variables the scripts already use (`%SWPARTTPL%`, `%SWOUTDIR%`), so it is
-rejected as a placeholder with a message naming the correct form.
+variables the scripts already use (`%SWPARTTPL%`, `%SWASMTPL%`, `%SWOUTDIR%`), so
+it is rejected as a placeholder with a message naming the correct form.
+
+An assembly recipe records components instead of a body count:
+
+```json
+"verify": { "componentCount": 3 }
+```
 
 Where recipes live: user recipes in the plugin's `recipeDir` (default
 `<scratch>/recipes`, set it to a stable path to keep them across restarts), plus
@@ -217,6 +226,17 @@ Measured on SolidWorks 2026 SP2.1, zh-CN Windows, late binding through
   invalid parameter count and the `CreateDefinition(18)` pipeline fails inside
   `AccessSelections`. Threads are therefore built as a **core body at the minor
   diameter plus a merged swept boss** — how a lathe cuts a thread.
+- **An assembly binds through a much narrower window than the API suggests.**
+  Every method with a ByRef out-parameter fails with `13 类型不匹配`, which
+  removes `OpenDoc6` and the whole `LoadFile*`/`OpenDoc*` family (leaving the
+  2-argument `OpenDoc`), and removes `AddMate2`–`AddMate5`. `GetComponents(True)`
+  binds with the correct count but every element is `Empty`, so component names,
+  paths and transforms are unreachable. Assemblies are therefore built from an
+  `.asmdot`, filled with `AddComponent5`, **positioned rather than constrained**,
+  and verified by component and suppression counts. Mate state is not merely
+  unwritable but unreadable: `GetMates` / `GetMateCount` fail with `438` and the
+  `MateGroup` container is present even with no mate. Full list:
+  the `solidworks-modeling` skill's `references/assembly-com-vbscript.md`.
 - **The API surface is per-install, not per-plugin.** Every one of the facts
   above was measured on one release, so the probe result is cached under the
   install that produced it (`capabilities-<year>.json`) rather than under a
@@ -245,6 +265,7 @@ Configuration (`cordis.patch.yml`):
 | Field | Default | Meaning |
 |---|---|---|
 | `partTemplate` | auto | `.prtdot` path; empty scans `C:\ProgramData\SOLIDWORKS\<year>\templates` for the newest **ASCII-named** template |
+| `assemblyTemplate` | auto | `.asmdot` path, exported to scripts as `%SWASMTPL%`; empty scans the same directory. A part template cannot create an assembly document, so an assembly build needs this |
 | `scratchDir` | `%TEMP%\dsh-solidworks` | ASCII scratch for staged scripts, renders, reports; must stay ASCII |
 | `defaultTimeoutMs` | `900000` | Hard cap per `solidworks_run` |
 | `cacheDir` | scratch dir | where `capabilities.json` is cached |
@@ -283,6 +304,62 @@ Set fTh = fm.InsertProtrusionSwept4(True, False, 0, False, False, 0, 0, False, _
 `solidworks_verify` accepting `bodyCount = 1` with
 `["Extrude","Helix","SweepBoss"]` is what turns that script into a recipe.
 
+## Assemblies
+
+An assembly is a different document type with its own template, so it is created
+from `%SWASMTPL%` and verified against **components**, not bodies:
+
+```
+solidworks_run { script: "<asm build script>" }        # %SWASMTPL% is the .asmdot
+solidworks_verify { expectComponentCount: 3,
+                    expectSuppressedCount: 0 }
+```
+
+A reference build script ships at `assets/assembly_build.vbs`, and
+`test/assembly-verify.mjs` drives it end to end. The facts that shape every
+assembly script here:
+
+- **The part must be loaded first** with `swApp.OpenDoc(path, 1)` — the only
+  file-open route whose ByRef out-parameters do not stop it binding — and
+  `AddComponent5` returns `Nothing` **without an error** for a path it cannot
+  use, so always count the instances back afterwards.
+- **A non-ASCII path silently fails**, so the part is staged into the ASCII
+  scratch directory first (`FileSystemObject.CopyFile` is not a COM call, so it
+  may read the Chinese path even though `OpenDoc` may not).
+- **Mates cannot be created.** `AddMate2`–`AddMate5` fail on their ByRef status
+  parameter; the legacy `AddMate` binds but creates no mate feature at all. An
+  assembly built this way is positioned, not constrained.
+- **Build what you want to verify last.** Neither `OpenDoc` nor `NewDocument`
+  activates the document it returns, and `ActivateDoc3` fails with `13`, so an
+  assembly left active cannot be swapped back to a part from VBScript.
+  `solidworks_verify` measures the *active* document, so check the reported
+  `title` before trusting a verdict.
+- **An option parser is a real component.** The first version of the new
+  inspector compared `Left(arg, n)` against string literals, and the
+  `includereference` literal is 10 characters while the code took 9 — so
+  `includeReference=0` fell through to the legacy positional branch and
+  *overwrote the view ids*. That surfaced as a file literally named
+  `viewincludeReference=0.bmp` and then as `inspect-failed: … is not valid
+  JSON`. Options are now explicit `key=value`, a non-numeric view id is rejected
+  instead of rendered, and the positional fallback cannot override an option
+  that was already set. Only running the gate end to end found it: the build
+  itself looked perfectly plausible.
+
+`inspect.vbs` reports `documentType` (`part` / `assembly` / `drawing`) and, for an
+assembly, an `assembly` object with `componentCount`, `referenceFeatureCount`,
+`mateCount`, `mateCountAvailable` and `suppressedFeatureCount`. Two things the
+inspector deliberately refuses to guess at:
+
+- **Component names, paths and transforms** are unreachable — `GetComponents(True)`
+  binds and its length is correct, but every element comes back `Empty` — so
+  `componentDetailsAvailable` is reported as `false`.
+- **Mate state is invisible, not zero.** The `MateGroup` feature exists even in an
+  assembly with no mate at all, its `GetFirstSubFeature` is `Nothing`, and
+  `GetMates` / `GetMateCount` / `FeatureManager.GetMates` all fail with `438`. A
+  count of 0 would claim "no mates" from a route that cannot see them either way,
+  so `mateCount` is `null` with `mateCountAvailable: false`, and
+  `expectMateCount` reports the check as unavailable rather than passing it.
+
 ## Tests
 
 Two classes, and the split is deliberate: the offline class runs anywhere and is
@@ -298,6 +375,8 @@ node test/schema-guard.mjs           # schemas inside the Harness's enforced sub
 node test/routing-advice.mjs         # capability report -> routing guidance
 node test/capability-cache.mjs       # the probe cache is scoped per install
 node test/error-codes.mjs            # every failure carries a stable code
+node test/template-export.mjs        # both templates resolve and are exported
+node test/assembly-gate.mjs          # part-vs-assembly verification judgement
 ```
 
 **Needs a live SolidWorks session** — these drive COM and are run by hand on a
@@ -306,6 +385,7 @@ CAD machine:
 ```
 node test/drive-tools.mjs            # run + verify + probe against live SolidWorks
 node test/output-contract.mjs        # result fields survive the host's JSON contract
+node test/assembly-verify.mjs        # build an assembly, gate it, prove the gate fails
 node test/verify-active.mjs <build.vbs> <bodyCount> [kinds]
 node test/rebuild-via-plugin.mjs     # rebuild a known shape through the plugin
 node test/promote-thread-recipe.mjs  # the recipe gate
@@ -313,6 +393,25 @@ node test/recipe-candidates.mjs      # candidate scripts against the live API
 node test/recipes.mjs                # the recipe data layer (save / run / isolation)
 node test/recipe-output-contract.mjs # recipe result shape
 ```
+
+`assembly-gate.mjs` is the offline half of the assembly work: `verifyModel` takes
+an injectable `inspect` report (via `verifyModel(expect, { inspect })`), so the
+part/assembly judgement — including the rule that a body count is *not* judged on
+an assembly — is covered without CAD. `assembly-verify.mjs` is the live half. It
+reports `SKIP` with the observed reason (rather than failing) for an environment
+fault, of which there are two, both measured:
+
+- a sandboxed Node may be unable to launch the interpreter at all — which is why
+  the runner now redirects output to a file instead of piping it;
+- **SolidWorks exposes one automation connection at a time.** An always-on
+  Harness session holds it for its own tool calls, so a *second* client — the
+  test's own `cscript`, or a hand-run script while the app is up — is refused
+  with `429 ActiveX component can't create object`, no matter how many documents
+  are open or closed. The plugin keeps working; the extra client is what cannot
+  attach. Run this test with the app closed, or accept the SKIP.
+
+A genuine build failure still falls through to a `FAIL` check, so the skip rule
+cannot hide a regression.
 
 `schema-guard.mjs` exists because a schema violation does not fail one tool — it
 aborts the **whole plugin entry** at composition time with
